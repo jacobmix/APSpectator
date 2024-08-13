@@ -12,6 +12,7 @@ const maxReconnectAttempts = 10;
 let preventReconnect = false;
 let reconnectAttempts = 0;
 let reconnectTimeout = null;
+let lastProtocolIndex = 0; // 0 for 'ws', 1 for 'wss'
 
 // Players in the current game, received from Connected server packet
 let playerSlot = null;
@@ -56,32 +57,49 @@ const beginConnectionAttempt = (event) => {
       serverSocket = null;
     }
 
+    // If the user did not specify a server address or player, do not attempt to connect
     return;
   }
 
   // User specified a server. Attempt to connect
   preventReconnect = false;
-  reconnectAttempts = 0; // Reset reconnect attempts on a new connection attempt
-  tryAlternateConnections(address, player, reconnectAttempts, maxReconnectAttempts);
+  reconnectAttempts = 0;
+  lastProtocolIndex = 0; // Start with 'ws'
+  connectToServer(address, player);
 };
 
-const tryAlternateConnections = (address, player, attempts, maxAttempts) => {
-  if (attempts >= maxAttempts || preventReconnect) {
-    appendConsoleMessage('Failed to connect to Archipelago server after maximum attempts.');
-    return;
+const connectToServer = (address, player, password = null) => {
+  if (serverSocket && serverSocket.readyState === WebSocket.OPEN) {
+    serverSocket.close();
+    serverSocket = null;
   }
 
-  const isSecureAttempt = attempts % 2 === 0;  // Alternate between wss (even attempts) and ws (odd attempts)
-  const protocol = isSecureAttempt ? 'wss' : 'ws';
-  const url = `${protocol}://${address}`;
+  // If an empty string is passed as the address, do not attempt to connect
+  if (!address) { return; }
 
-  serverSocket = new WebSocket(url);
+  // This is a new connection attempt, no auth error has occurred yet
+  serverAuthError = false;
 
-  serverSocket.onopen = () => {
-    appendConsoleMessage(`Connected to Archipelago server at ${url}`);
-    preventReconnect = true; // Stop further reconnection attempts
+  // Determine the server address
+  let serverAddress = address;
+  if (serverAddress.search(/^\/connect /) > -1) { serverAddress = serverAddress.substring(9); }
+  if (serverAddress.search(/:\d+$/) === -1) { serverAddress = `${serverAddress}:${DEFAULT_SERVER_PORT}`; }
+
+  // Store the password, if given
+  serverPassword = password;
+
+  // Alternate between 'ws' and 'wss'
+  const protocol = lastProtocolIndex === 0 ? 'ws' : 'wss';
+  lastProtocolIndex = (lastProtocolIndex + 1) % 2;
+
+  // Attempt to connect to the server
+  serverSocket = new WebSocket(`${protocol}://${serverAddress}`);
+  serverSocket.onopen = (event) => {
+    appendConsoleMessage(`Connected to Archipelago server at ${serverAddress} using ${protocol}`);
+    reconnectAttempts = 0; // Reset attempts on successful connection
   };
 
+  // Handle incoming messages
   serverSocket.onmessage = (event) => {
     console.log(event);
 
@@ -90,6 +108,7 @@ const tryAlternateConnections = (address, player, attempts, maxAttempts) => {
       const serverStatus = document.getElementById('server-status');
       switch (command.cmd) {
         case 'RoomInfo':
+          // Authenticate with the server
           const connectionData = {
             cmd: 'Connect',
             game: null,
@@ -104,12 +123,20 @@ const tryAlternateConnections = (address, player, attempts, maxAttempts) => {
           break;
 
         case 'Connected':
+          // Save the last server that was successfully connected to
           lastServerAddress = address;
+
+          // Reset reconnection info if necessary
           reconnectAttempts = 0;
+
+          // Save the list of players provided by the server
           players = command.players;
+
+          // Save information about the current player
           playerTeam = command.team;
           playerSlot = command.slot;
 
+          // Update header text
           serverStatus.classList.remove('disconnected');
           serverStatus.innerText = 'Connected';
           serverStatus.classList.add('connected');
@@ -161,35 +188,58 @@ const tryAlternateConnections = (address, player, attempts, maxAttempts) => {
           break;
 
         default:
+          // Unhandled events are ignored
           break;
       }
     }
   };
 
-  serverSocket.onclose = () => {
+  serverSocket.onclose = (event) => {
     const serverStatus = document.getElementById('server-status');
     serverStatus.classList.remove('connected');
     serverStatus.innerText = 'Not Connected';
     serverStatus.classList.add('disconnected');
 
-    if (!preventReconnect) {
-      reconnectTimeout = setTimeout(() => {
-        tryAlternateConnections(address, player, attempts + 1, maxAttempts);
-      }, 5000);
+    // If the user cleared the server address, do nothing
+    const serverAddress = document.getElementById('server-address').value;
+    if (preventReconnect || !serverAddress) { return; }
+
+    // Do not allow simultaneous reconnection attempts
+    if (reconnectTimeout) {
+      clearTimeout(reconnectTimeout);
+      reconnectTimeout = null;
     }
+
+    // Attempt to reconnect to the AP server
+    reconnectTimeout = setTimeout(() => {
+      // Do not attempt to reconnect if a server connection exists already. This can happen if a user attempts
+      // to connect to a new server after connecting to a previous one
+      if (serverSocket && serverSocket.readyState === WebSocket.OPEN) { return; }
+
+      // If the socket was closed in response to an auth error, do not reconnect
+      if (serverAuthError) { return; }
+
+      // If reconnection is currently prohibited for any other reason, do not attempt to reconnect
+      if (preventReconnect) { return; }
+
+      // Do not exceed the limit of reconnection attempts
+      if (++reconnectAttempts > maxReconnectAttempts) {
+        appendConsoleMessage('Archipelago server connection lost. The connection closed unexpectedly. ' +
+          'Please try to reconnect, or restart the client.');
+        return;
+      }
+
+      appendConsoleMessage(`Connection to AP server lost. Attempting to reconnect ` +
+        `(${reconnectAttempts} of ${maxReconnectAttempts})`);
+      connectToServer(address, player, serverPassword);
+    }, 5000);
   };
 
-  serverSocket.onerror = () => {
+  serverSocket.onerror = (event) => {
     if (serverSocket && serverSocket.readyState === WebSocket.OPEN) {
       appendConsoleMessage('Archipelago server connection lost. The connection closed unexpectedly. ' +
         'Please try to reconnect, or restart the client.');
       serverSocket.close();
-    }
-
-    if (!preventReconnect) {
-      reconnectTimeout = setTimeout(() => {
-        tryAlternateConnections(address, player, attempts + 1, maxAttempts);
-      }, 5000);
     }
   };
 };
@@ -221,10 +271,12 @@ const requestDataPackage = () => {
 
 const buildItemAndLocationData = (dataPackage) => {
   Object.keys(dataPackage.games).forEach((gameName) => {
+    // Build itemId map
     Object.keys(dataPackage.games[gameName].item_name_to_id).forEach((itemName) => {
       apItemsById[dataPackage.games[gameName].item_name_to_id[itemName]] = itemName;
     });
 
+    // Build locationId map
     Object.keys(dataPackage.games[gameName].location_name_to_id).forEach((locationName) => {
       apLocationsById[dataPackage.games[gameName].location_name_to_id[locationName]] = locationName;
     });
