@@ -56,54 +56,30 @@ const beginConnectionAttempt = (event) => {
       serverSocket = null;
     }
 
-    // If the user did not specify a server address or player, do not attempt to connect
     return;
   }
 
   // User specified a server. Attempt to connect
   preventReconnect = false;
-  connectToServer(address, player);
+  reconnectAttempts = 0; // Reset reconnect attempts on a new connection attempt
+  tryAlternateConnections(address, player, reconnectAttempts, maxReconnectAttempts);
 };
 
-const connectToServer = (address, player, password = null) => {
-  if (serverSocket && serverSocket.readyState === WebSocket.OPEN) {
-    serverSocket.close();
-    serverSocket = null;
-  }
-
-  // If an empty string is passed as the address, do not attempt to connect
-  if (!address) { return; }
-
-  // This is a new connection attempt, no auth error has occurred yet
-  serverAuthError = false;
-
-  // Determine the server address
-  let serverAddress = address;
-  if (serverAddress.search(/^\/connect /) > -1) { serverAddress = serverAddress.substring(9); }
-  if (serverAddress.search(/:\d+$/) === -1) { serverAddress = `${serverAddress}:${DEFAULT_SERVER_PORT}`;}
-
-  // Store the password, if given
-  serverPassword = password;
-
-  // Try connecting with wss first, then fallback to ws if necessary
-  tryWebSocketConnection(`wss://${serverAddress}`, player, 0, maxReconnectAttempts, true, (success) => {
-    if (!success) {
-      tryWebSocketConnection(`ws://${serverAddress}`, player, 0, maxReconnectAttempts, false);
-    }
-  });
-};
-
-const tryWebSocketConnection = (url, player, attempts, maxAttempts, isSecure, callback) => {
-  if (attempts >= maxAttempts) {
-    if (callback) callback(false);
+const tryAlternateConnections = (address, player, attempts, maxAttempts) => {
+  if (attempts >= maxAttempts || preventReconnect) {
+    appendConsoleMessage('Failed to connect to Archipelago server after maximum attempts.');
     return;
   }
+
+  const isSecureAttempt = attempts % 2 === 0;  // Alternate between wss (even attempts) and ws (odd attempts)
+  const protocol = isSecureAttempt ? 'wss' : 'ws';
+  const url = `${protocol}://${address}`;
 
   serverSocket = new WebSocket(url);
 
   serverSocket.onopen = () => {
     appendConsoleMessage(`Connected to Archipelago server at ${url}`);
-    if (callback) callback(true);
+    preventReconnect = true; // Stop further reconnection attempts
   };
 
   serverSocket.onmessage = (event) => {
@@ -114,7 +90,6 @@ const tryWebSocketConnection = (url, player, attempts, maxAttempts, isSecure, ca
       const serverStatus = document.getElementById('server-status');
       switch (command.cmd) {
         case 'RoomInfo':
-          // Authenticate with the server
           const connectionData = {
             cmd: 'Connect',
             game: null,
@@ -129,20 +104,12 @@ const tryWebSocketConnection = (url, player, attempts, maxAttempts, isSecure, ca
           break;
 
         case 'Connected':
-          // Save the last server that was successfully connected to
-          lastServerAddress = url;
-
-          // Reset reconnection info if necessary
+          lastServerAddress = address;
           reconnectAttempts = 0;
-
-          // Save the list of players provided by the server
           players = command.players;
-
-          // Save information about the current player
           playerTeam = command.team;
           playerSlot = command.slot;
 
-          // Update header text
           serverStatus.classList.remove('disconnected');
           serverStatus.innerText = 'Connected';
           serverStatus.classList.add('connected');
@@ -194,7 +161,6 @@ const tryWebSocketConnection = (url, player, attempts, maxAttempts, isSecure, ca
           break;
 
         default:
-          // Unhandled events are ignored
           break;
       }
     }
@@ -208,10 +174,8 @@ const tryWebSocketConnection = (url, player, attempts, maxAttempts, isSecure, ca
 
     if (!preventReconnect) {
       reconnectTimeout = setTimeout(() => {
-        tryWebSocketConnection(url, player, attempts + 1, maxAttempts, isSecure, callback);
+        tryAlternateConnections(address, player, attempts + 1, maxAttempts);
       }, 5000);
-    } else if (callback) {
-      callback(false);
     }
   };
 
@@ -221,7 +185,12 @@ const tryWebSocketConnection = (url, player, attempts, maxAttempts, isSecure, ca
         'Please try to reconnect, or restart the client.');
       serverSocket.close();
     }
-    if (callback) callback(false);
+
+    if (!preventReconnect) {
+      reconnectTimeout = setTimeout(() => {
+        tryAlternateConnections(address, player, attempts + 1, maxAttempts);
+      }, 5000);
+    }
   };
 };
 
@@ -252,12 +221,10 @@ const requestDataPackage = () => {
 
 const buildItemAndLocationData = (dataPackage) => {
   Object.keys(dataPackage.games).forEach((gameName) => {
-    // Build itemId map
     Object.keys(dataPackage.games[gameName].item_name_to_id).forEach((itemName) => {
       apItemsById[dataPackage.games[gameName].item_name_to_id[itemName]] = itemName;
     });
 
-    // Build locationId map
     Object.keys(dataPackage.games[gameName].location_name_to_id).forEach((locationName) => {
       apLocationsById[dataPackage.games[gameName].location_name_to_id[locationName]] = locationName;
     });
