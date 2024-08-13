@@ -65,4 +65,4 @@ You can change other elements by styling the following CSS classes:
 | `.console-message-item-normal`      | Items that aren't in any of the above categories
 | `.console-message-entrance`         | Entrance names (seen in hints)
 
-For more details, see [console.css](public/styles/console.css).  For a sample that updates colors to match common client colors, see [commonclient.css](public/styles/commonclient.css)
+For more details, see [console.css](public/styles/console.css).  For a sample that updates colors to match common client colors, see [commonClient.css](public/styles/commonClient.css)
