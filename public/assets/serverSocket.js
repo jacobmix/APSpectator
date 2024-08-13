@@ -12,6 +12,7 @@ const maxReconnectAttempts = 10;
 let preventReconnect = false;
 let reconnectAttempts = 0;
 let reconnectTimeout = null;
+let lastProtocolIndex = 0; // 0 for 'ws', 1 for 'wss'
 
 // Players in the current game, received from Connected server packet
 let playerSlot = null;
@@ -23,15 +24,15 @@ window.addEventListener('load', () => {
   document.getElementById('server-address').addEventListener('keydown', beginConnectionAttempt);
   document.getElementById('player').addEventListener('keydown', beginConnectionAttempt);
 
-  const url = new URL(window.location)
+  const url = new URL(window.location);
   const server = url.searchParams.get('server');
   const player = url.searchParams.get('player');
 
-  if(server && player) {
+  if (server && player) {
     connectToServer(server, player, url.searchParams.get('password'));
   }
 
-  if(!!parseInt(url.searchParams.get('hideui'))) {
+  if (!!parseInt(url.searchParams.get('hideui'))) {
     document.getElementById('header').classList.add('hidden');
     document.getElementById('console-input-wrapper').classList.add('hidden');
   }
@@ -62,6 +63,8 @@ const beginConnectionAttempt = (event) => {
 
   // User specified a server. Attempt to connect
   preventReconnect = false;
+  reconnectAttempts = 0;
+  lastProtocolIndex = 0; // Start with 'ws'
   connectToServer(address, player);
 };
 
@@ -80,15 +83,20 @@ const connectToServer = (address, player, password = null) => {
   // Determine the server address
   let serverAddress = address;
   if (serverAddress.search(/^\/connect /) > -1) { serverAddress = serverAddress.substring(9); }
-  if (serverAddress.search(/:\d+$/) === -1) { serverAddress = `${serverAddress}:${DEFAULT_SERVER_PORT}`;}
+  if (serverAddress.search(/:\d+$/) === -1) { serverAddress = `${serverAddress}:${DEFAULT_SERVER_PORT}`; }
 
   // Store the password, if given
   serverPassword = password;
 
+  // Alternate between 'ws' and 'wss'
+  const protocol = lastProtocolIndex === 0 ? 'ws' : 'wss';
+  lastProtocolIndex = (lastProtocolIndex + 1) % 2;
+
   // Attempt to connect to the server
-  serverSocket = new WebSocket(`wss://${serverAddress}`);
+  serverSocket = new WebSocket(`${protocol}://${serverAddress}`);
   serverSocket.onopen = (event) => {
-    appendConsoleMessage(`Connected to Archipelago server at ${serverAddress}`);
+    appendConsoleMessage(`Connected to Archipelago server at ${serverAddress} using ${protocol}`);
+    reconnectAttempts = 0; // Reset attempts on successful connection
   };
 
   // Handle incoming messages
@@ -98,7 +106,7 @@ const connectToServer = (address, player, password = null) => {
     const commands = JSON.parse(event.data);
     for (let command of commands) {
       const serverStatus = document.getElementById('server-status');
-      switch(command.cmd) {
+      switch (command.cmd) {
         case 'RoomInfo':
           // Authenticate with the server
           const connectionData = {
@@ -223,7 +231,7 @@ const connectToServer = (address, player, password = null) => {
 
       appendConsoleMessage(`Connection to AP server lost. Attempting to reconnect ` +
         `(${reconnectAttempts} of ${maxReconnectAttempts})`);
-      connectToServer(address, serverPassword);
+      connectToServer(address, player, serverPassword);
     }, 5000);
   };
 
