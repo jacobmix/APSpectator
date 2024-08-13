@@ -86,7 +86,7 @@ const connectToServer = (address, player, password = null) => {
   serverPassword = password;
 
   // Attempt to connect to the server
-  serverSocket = new WebSocket(`ws://${serverAddress}`);
+  serverSocket = new WebSocket(`wss://${serverAddress}`);
   serverSocket.onopen = (event) => {
     appendConsoleMessage(`Connected to Archipelago server at ${serverAddress}`);
   };
