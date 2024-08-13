@@ -23,15 +23,15 @@ window.addEventListener('load', () => {
   document.getElementById('server-address').addEventListener('keydown', beginConnectionAttempt);
   document.getElementById('player').addEventListener('keydown', beginConnectionAttempt);
 
-  const url = new URL(window.location)
+  const url = new URL(window.location);
   const server = url.searchParams.get('server');
   const player = url.searchParams.get('player');
 
-  if(server && player) {
+  if (server && player) {
     connectToServer(server, player, url.searchParams.get('password'));
   }
 
-  if(!!parseInt(url.searchParams.get('hideui'))) {
+  if (!!parseInt(url.searchParams.get('hideui'))) {
     document.getElementById('header').classList.add('hidden');
     document.getElementById('console-input-wrapper').classList.add('hidden');
   }
@@ -85,20 +85,34 @@ const connectToServer = (address, player, password = null) => {
   // Store the password, if given
   serverPassword = password;
 
-  // Attempt to connect to the server
-  serverSocket = new WebSocket(`wss://${serverAddress}`);
-  serverSocket.onopen = (event) => {
-    appendConsoleMessage(`Connected to Archipelago server at ${serverAddress}`);
+  // Try connecting with wss first, then fallback to ws if necessary
+  tryWebSocketConnection(`wss://${serverAddress}`, player, 0, maxReconnectAttempts, true, (success) => {
+    if (!success) {
+      tryWebSocketConnection(`ws://${serverAddress}`, player, 0, maxReconnectAttempts, false);
+    }
+  });
+};
+
+const tryWebSocketConnection = (url, player, attempts, maxAttempts, isSecure, callback) => {
+  if (attempts >= maxAttempts) {
+    if (callback) callback(false);
+    return;
+  }
+
+  serverSocket = new WebSocket(url);
+
+  serverSocket.onopen = () => {
+    appendConsoleMessage(`Connected to Archipelago server at ${url}`);
+    if (callback) callback(true);
   };
 
-  // Handle incoming messages
   serverSocket.onmessage = (event) => {
     console.log(event);
 
     const commands = JSON.parse(event.data);
     for (let command of commands) {
       const serverStatus = document.getElementById('server-status');
-      switch(command.cmd) {
+      switch (command.cmd) {
         case 'RoomInfo':
           // Authenticate with the server
           const connectionData = {
@@ -116,7 +130,7 @@ const connectToServer = (address, player, password = null) => {
 
         case 'Connected':
           // Save the last server that was successfully connected to
-          lastServerAddress = address;
+          lastServerAddress = url;
 
           // Reset reconnection info if necessary
           reconnectAttempts = 0;
@@ -186,53 +200,28 @@ const connectToServer = (address, player, password = null) => {
     }
   };
 
-  serverSocket.onclose = (event) => {
+  serverSocket.onclose = () => {
     const serverStatus = document.getElementById('server-status');
     serverStatus.classList.remove('connected');
     serverStatus.innerText = 'Not Connected';
     serverStatus.classList.add('disconnected');
 
-    // If the user cleared the server address, do nothing
-    const serverAddress = document.getElementById('server-address').value;
-    if (preventReconnect || !serverAddress) { return; }
-
-    // Do not allow simultaneous reconnection attempts
-    if (reconnectTimeout) {
-      clearTimeout(reconnectTimeout);
-      reconnectTimeout = null;
+    if (!preventReconnect) {
+      reconnectTimeout = setTimeout(() => {
+        tryWebSocketConnection(url, player, attempts + 1, maxAttempts, isSecure, callback);
+      }, 5000);
+    } else if (callback) {
+      callback(false);
     }
-
-    // Attempt to reconnect to the AP server
-    reconnectTimeout = setTimeout(() => {
-      // Do not attempt to reconnect if a server connection exists already. This can happen if a user attempts
-      // to connect to a new server after connecting to a previous one
-      if (serverSocket && serverSocket.readyState === WebSocket.OPEN) { return; }
-
-      // If the socket was closed in response to an auth error, do not reconnect
-      if (serverAuthError) { return; }
-
-      // If reconnection is currently prohibited for any other reason, do not attempt to reconnect
-      if (preventReconnect) { return; }
-
-      // Do not exceed the limit of reconnection attempts
-      if (++reconnectAttempts > maxReconnectAttempts) {
-        appendConsoleMessage('Archipelago server connection lost. The connection closed unexpectedly. ' +
-          'Please try to reconnect, or restart the client.');
-        return;
-      }
-
-      appendConsoleMessage(`Connection to AP server lost. Attempting to reconnect ` +
-        `(${reconnectAttempts} of ${maxReconnectAttempts})`);
-      connectToServer(address, serverPassword);
-    }, 5000);
   };
 
-  serverSocket.onerror = (event) => {
+  serverSocket.onerror = () => {
     if (serverSocket && serverSocket.readyState === WebSocket.OPEN) {
       appendConsoleMessage('Archipelago server connection lost. The connection closed unexpectedly. ' +
         'Please try to reconnect, or restart the client.');
       serverSocket.close();
     }
+    if (callback) callback(false);
   };
 };
 
