@@ -67,7 +67,7 @@ const beginConnectionAttempt = (event) => {
   // User specified a server. Attempt to connect
   preventReconnect = false;
   reconnectAttempts = 0;
-  lastProtocolIndex = 0; // Start with 'ws'
+  lastProtocolIndex = 0; // Start with 'wss'
   connectToServer(address, player);
 };
 
