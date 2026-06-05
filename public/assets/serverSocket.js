@@ -12,7 +12,7 @@ const maxReconnectAttempts = 10;
 let preventReconnect = false;
 let reconnectAttempts = 0;
 let reconnectTimeout = null;
-let lastProtocolIndex = 0; // 0 for 'ws', 1 for 'wss'
+let lastProtocolIndex = 0; // 0 for 'wss', 1 for 'ws'
 
 // Players in the current game, received from Connected server packet
 let playerSlot = null;
@@ -29,6 +29,9 @@ window.addEventListener('load', () => {
   const player = url.searchParams.get('player');
 
   if (server && player) {
+    document.getElementById('server-address').value = server;
+    document.getElementById('player').value = player;
+
     connectToServer(server, player, url.searchParams.get('password'));
   }
 
@@ -89,7 +92,7 @@ const connectToServer = (address, player, password = null) => {
   serverPassword = password;
 
   // Alternate between 'ws' and 'wss'
-  const protocol = lastProtocolIndex === 0 ? 'ws' : 'wss';
+  const protocol = lastProtocolIndex === 0 ? 'wss' : 'ws';
   lastProtocolIndex = (lastProtocolIndex + 1) % 2;
 
   // Attempt to connect to the server
